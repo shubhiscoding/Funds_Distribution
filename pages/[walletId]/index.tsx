@@ -7,6 +7,7 @@ import { PublicKey, Transaction } from '@solana/web3.js'
 import { AsyncButton } from 'common/Button'
 import { Header } from 'common/Header'
 import { notify } from 'common/Notification'
+import { Copy, Check } from 'lucide-react';
 import {
   getMintNaturalAmountFromDecimal,
   getPriorityFeeIx,
@@ -33,6 +34,8 @@ const Home: NextPage = () => {
   const wallet = useWallet()
   const fanoutData = useFanoutData()
   const { connection, environment } = useEnvironmentCtx()
+  const [copied, setCopied] = useState(false);
+  const [copiedFan, setFanCopied] = useState(false);
   let selectedFanoutMint =
     mintId && fanoutMints.data
       ? fanoutMints.data.find((mint) => mint.data.mint.toString() === mintId)
@@ -77,40 +80,6 @@ const Home: NextPage = () => {
     }
     setMapping()
   }, [fanoutMembershipVouchers.data, selectedFanoutMint, mintId])
-
-  async function addSplToken() {
-    if (fanoutData.data?.fanoutId) {
-      try {
-        const tokenAddress = prompt('Please enter an SPL token address:')
-        const tokenPK = tryPublicKey(tokenAddress)
-        if (!tokenPK) {
-          throw 'Invalid SPL token address, please enter a valid address based on your network'
-        }
-        const fanoutSdk = new FanoutClient(connection, asWallet(wallet!))
-        const transaction = new Transaction()
-        transaction.add(
-          ...(
-            await fanoutSdk.initializeFanoutForMintInstructions({
-              fanout: fanoutData.data?.fanoutId,
-              mint: tokenPK,
-            })
-          ).instructions
-        )
-        await executeTransaction(connection, wallet as Wallet, transaction, {})
-        notify({
-          message: 'SPL Token added!',
-          description: `Select the new token in the dropdown menu.`,
-          type: 'success',
-        })
-      } catch (e) {
-        notify({
-          message: 'Error adding SPL Token',
-          description: `${e}`,
-          type: 'error',
-        })
-      }
-    }
-  }
 
   const selectSplToken = (mintId: string) => {
     setMintId(mintId === 'default' ? undefined : mintId)
@@ -218,6 +187,16 @@ const Home: NextPage = () => {
     }
   }
 
+  const handleCopy = async (text, setCopied) => {
+    try {
+      await navigator.clipboard.writeText(text ?? '');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
   return (
     <div className="bg-white h-screen max-h-screen">
       <Header />
@@ -319,6 +298,17 @@ const Home: NextPage = () => {
               >
                 {shortPubKey(fanoutData.data?.fanoutId.toString())}
               </a>
+                <button
+                  onClick={()=>{handleCopy(fanoutData.data?.fanoutId.toString(), setFanCopied)}}
+                  className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+                  title={copiedFan ? 'Copied!' : 'Copy address'}
+                >
+                  {copiedFan ? (
+                    <Check className="w-4 h-4 text-green-500" />
+                  ) : (
+                    <Copy className="w-4 h-4 text-gray-500" />
+                  )}
+                </button>
             </p>
             {selectedFanoutMint ? (
               <p className="font-bold uppercase tracking-wide text-md mb-1">
@@ -334,6 +324,17 @@ const Home: NextPage = () => {
                 >
                   {shortPubKey(selectedFanoutMint.data.tokenAccount)}
                 </a>
+                <button
+                  onClick={()=>{handleCopy(selectedFanoutMint.data.tokenAccount, setCopied)}}
+                  className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+                  title={copied ? 'Copied!' : 'Copy address'}
+                >
+                  {copied ? (
+                    <Check className="w-4 h-4 text-green-500" />
+                  ) : (
+                    <Copy className="w-4 h-4 text-gray-500" />
+                  )}
+                </button>
               </p>
             ) : (
               <p className="font-bold uppercase tracking-wide text-md mb-1">
@@ -349,6 +350,17 @@ const Home: NextPage = () => {
                 >
                   {shortPubKey(fanoutData.data?.nativeAccount)}
                 </a>
+                <button
+                  onClick={()=>{handleCopy(fanoutData.data?.nativeAccount, setCopied)}}
+                  className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+                  title={copied ? 'Copied!' : 'Copy address'}
+                >
+                  {copied ? (
+                    <Check className="w-4 h-4 text-green-500" />
+                  ) : (
+                    <Copy className="w-4 h-4 text-gray-500" />
+                  )}
+                </button>
               </p>
             )}
             <p className="font-bold uppercase tracking-wide text-md mb-1">
@@ -424,19 +436,6 @@ const Home: NextPage = () => {
             >
               Distribute To All
             </AsyncButton>
-            {fanoutData.data &&
-              fanoutData.data.fanout.authority.toString() ===
-                wallet.publicKey?.toString() && (
-                <AsyncButton
-                  type="button"
-                  variant="primary"
-                  bgColor="rgb(156 163 175)"
-                  className="bg-gray-400 text-white hover:bg-blue-500 px-3 py-2 rounded-md "
-                  handleClick={async () => addSplToken()}
-                >
-                  Add SPL Token
-                </AsyncButton>
-              )}
           </div>
         </div>
       </main>

@@ -10,7 +10,7 @@ import { getPriorityFeeIx, tryPublicKey } from 'common/utils'
 import { asWallet } from 'common/Wallets'
 import type { NextPage } from 'next'
 import { useEnvironmentCtx } from 'providers/EnvironmentProvider'
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 
 const MIN_TOKEN_REQUIREMENT = 100000; // 100k tokens minimum requirement
 
@@ -23,9 +23,10 @@ const Home: NextPage = () => {
   const [hydraWalletMembers, setHydraWalletMembers] = useState<
     { memberKey?: string; shares?: number; tokenBalance?: number }[]
   >([{ memberKey: undefined, shares: undefined, tokenBalance: undefined }])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   async function checkTokenBalance(walletAddress: PublicKey): Promise<number> {
-    const tokenMint = new PublicKey("mnteNm259udftD538hVXtEGHVsybdSjiU9QBAGYFgsM");
+    const tokenMint = new PublicKey(process.env.NEXT_PUBLIC_TOKEN_MINT!);
     try {
       const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
         walletAddress,
@@ -78,7 +79,7 @@ const Home: NextPage = () => {
         notify({
           message: 'Low Token Balance',
           description: `This wallet has less than ${MIN_TOKEN_REQUIREMENT} tokens. Shares will be set to 0.`,
-          type: 'warning',
+          type: 'warn',
         });
       }
     } catch (error) {
@@ -180,6 +181,70 @@ const Home: NextPage = () => {
     }
   }
 
+  const handleCsvImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const addresses = text.split(',').map(address => address.trim())
+        .filter(address => address.length > 0) // Filter out empty strings
+
+      // Create a new array of members
+      const newMembers: typeof hydraWalletMembers = []
+
+      for (const address of addresses) {
+        try {
+          const memberPubkey = tryPublicKey(address)
+          if (!memberPubkey) {
+            notify({
+              message: 'Invalid address in CSV',
+              description: `Skipping invalid address: ${address}`,
+              type: 'warn',
+            })
+            continue
+          }
+
+          const tokenBalance = await checkTokenBalance(memberPubkey)
+          newMembers.push({
+            memberKey: address,
+            tokenBalance,
+            shares: undefined
+          })
+        } catch (error) {
+          notify({
+            message: 'Error processing address',
+            description: `Failed to process address ${address}: ${error}`,
+            type: 'warn',
+          })
+        }
+      }
+
+      if (newMembers.length > 0) {
+        // Calculate shares for all members
+        const membersWithShares = calculateShares(newMembers)
+        setHydraWalletMembers(membersWithShares)
+
+        notify({
+          message: 'CSV Import Success',
+          description: `Imported ${newMembers.length} wallet addresses`,
+          type: 'success',
+        })
+      }
+    } catch (error) {
+      notify({
+        message: 'CSV Import Error',
+        description: `Failed to import CSV: ${error}`,
+        type: 'error',
+      })
+    }
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
   return (
     <div className="bg-white h-screen max-h-screen">
       <Header />
@@ -222,11 +287,30 @@ const Home: NextPage = () => {
               value={walletName}
             />
           </div>
-          <div className="flex flex-wrap mb-6">
+          <div className="flex flex-wrap">
+            <button
+              type="button"
+              style={{ backgroundColor: '#000' }}
+              className=" text-white hover:bg-green-600 px-4 py-2 rounded-md text-sm mb-6"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Import from CSV
+            </button>
             <div className="w-4/5 pr-3 mb-6 md:mb-0">
-              <label className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2">
-                Wallet Address
-              </label>
+            <div className="flex justify-between items-center mb-2">
+                <label className="uppercase tracking-wide text-gray-700 text-xs font-bold">
+                  Wallet Address
+                </label>
+                <div>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleCsvImport}
+                    className="hidden"
+                    ref={fileInputRef}
+                  />
+                </div>
+              </div>
               {hydraWalletMembers &&
                 hydraWalletMembers.map((member, i) => {
                   return (
@@ -254,7 +338,7 @@ const Home: NextPage = () => {
               </label>
               {hydraWalletMembers.map((member, i) => {
                 return (
-                  <div className="flex mb-3" key={`share-${i}`}>
+                  <div className="flex mb-9" key={`share-${i}`}>
                     <input
                       className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
                       type="number"
