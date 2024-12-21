@@ -1,7 +1,8 @@
+import { TOKEN_PROGRAM_ID } from '@coral-xyz/anchor/dist/cjs/utils/token'
 import { Fanout, FanoutClient, MembershipModel } from '@metaplex-foundation/mpl-hydra/dist/src'
 import { Wallet } from '@saberhq/solana-contrib'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { PublicKey, Transaction } from '@solana/web3.js'
+import { PublicKey, Transaction, Connection } from '@solana/web3.js'
 import { AsyncButton } from 'common/Button'
 import { Header } from 'common/Header'
 import { notify } from 'common/Notification'
@@ -10,12 +11,13 @@ import { getPriorityFeeIx, tryPublicKey } from 'common/utils'
 import { asWallet } from 'common/Wallets'
 import type { NextPage } from 'next'
 import { useEnvironmentCtx } from 'providers/EnvironmentProvider'
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 const MIN_TOKEN_REQUIREMENT = 100000; // 100k tokens minimum requirement
 
 const Home: NextPage = () => {
-  const { connection } = useEnvironmentCtx()
+  const { connection, environment } = useEnvironmentCtx()
+  const [customConnection, setCustomConnection] = useState<Connection | null>(null)
   const wallet = useWallet()
   const [walletName, setWalletName] = useState<undefined | string>(undefined)
   const [totalShares, setTotalShares] = useState<undefined | number>(100)
@@ -25,20 +27,40 @@ const Home: NextPage = () => {
   >([{ memberKey: undefined, shares: undefined, tokenBalance: undefined }])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Initialize custom connection for mainnet-beta
+  useEffect(() => {
+    if (environment.label == 'mainnet-beta') {
+      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL
+      console.log(rpcUrl);
+      if (rpcUrl) {
+        setCustomConnection(new Connection(rpcUrl))
+      }
+    }
+  }, [environment.label])
+
+  // Use the appropriate connection
+  const getConnection = () => {
+    return environment.label === 'mainnet-beta' && customConnection ? customConnection : connection
+  }
+
   async function checkTokenBalance(walletAddress: PublicKey): Promise<number> {
     const tokenMint = new PublicKey(process.env.NEXT_PUBLIC_TOKEN_MINT!);
     try {
-      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      const tokenAccounts = await getConnection().getParsedTokenAccountsByOwner(
         walletAddress,
-        { programId: new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") }
+        { programId: TOKEN_PROGRAM_ID }
       );            
       let amount = 0;
+      console.log(walletAddress.toBase58());
+      console.log(tokenAccounts);
       for (const tokenAccount of tokenAccounts.value) {
         const tokenInfo = tokenAccount.account.data.parsed.info;
         if (tokenInfo.mint === tokenMint.toBase58()) {
+          console.log("were you here")
           amount += tokenInfo.tokenAmount.uiAmount;
         }
       }
+      console.log("Token balance:", amount);
       return amount;
     } catch (error) {
       console.error("Error checking token holdings:", error);
@@ -136,7 +158,7 @@ const Home: NextPage = () => {
 
       const fanoutId = (await FanoutClient.fanoutKey(walletName))[0]
       const [nativeAccountId] = await FanoutClient.nativeAccount(fanoutId)
-      const fanoutSdk = new FanoutClient(connection, asWallet(wallet!))
+      const fanoutSdk = new FanoutClient(getConnection(), asWallet(wallet!))
       try {
         let fanoutData = await fanoutSdk.fetch<Fanout>(fanoutId, Fanout)
         if (fanoutData) {
@@ -147,14 +169,14 @@ const Home: NextPage = () => {
       transaction.add(
         ...(
           await fanoutSdk.initializeFanoutInstructions({
-            totalShares: 100, // Always use 100 as total shares
+            totalShares: 100,
             name: walletName,
             membershipModel: MembershipModel.Wallet,
           })
         ).instructions
       )
       for (const member of hydraWalletMembers) {
-        if (member.shares! > 0) { // Only add members with shares greater than 0
+        if (member.shares! > 0) {
           transaction.add(
             ...(
               await fanoutSdk.addMemberWalletInstructions({
@@ -168,9 +190,9 @@ const Home: NextPage = () => {
         }
       }
       transaction.feePayer = wallet.publicKey!
-      const priorityFeeIx = await getPriorityFeeIx(connection, transaction)
+      const priorityFeeIx = await getPriorityFeeIx(getConnection(), transaction)
       transaction.add(priorityFeeIx)
-      await executeTransaction(connection, wallet as Wallet, transaction, {})
+      await executeTransaction(getConnection(), wallet as Wallet, transaction, {})
       setSuccess(true)
     } catch (e) {
       notify({
