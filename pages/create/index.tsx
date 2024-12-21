@@ -1,7 +1,7 @@
 import { Fanout, FanoutClient, MembershipModel } from '@metaplex-foundation/mpl-hydra/dist/src'
 import { Wallet } from '@saberhq/solana-contrib'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { Transaction } from '@solana/web3.js'
+import { PublicKey, Transaction } from '@solana/web3.js'
 import { AsyncButton } from 'common/Button'
 import { Header } from 'common/Header'
 import { notify } from 'common/Notification'
@@ -12,6 +12,8 @@ import type { NextPage } from 'next'
 import { useEnvironmentCtx } from 'providers/EnvironmentProvider'
 import { useState } from 'react'
 
+const MIN_TOKEN_REQUIREMENT = 100000; // 100k tokens minimum requirement
+
 const Home: NextPage = () => {
   const { connection } = useEnvironmentCtx()
   const wallet = useWallet()
@@ -19,8 +21,74 @@ const Home: NextPage = () => {
   const [totalShares, setTotalShares] = useState<undefined | number>(100)
   const [success, setSuccess] = useState(false)
   const [hydraWalletMembers, setHydraWalletMembers] = useState<
-    { memberKey?: string; shares?: number }[]
-  >([{ memberKey: undefined, shares: undefined }])
+    { memberKey?: string; shares?: number; tokenBalance?: number }[]
+  >([{ memberKey: undefined, shares: undefined, tokenBalance: undefined }])
+
+  async function checkTokenBalance(walletAddress: PublicKey): Promise<number> {
+    const tokenMint = new PublicKey("mnteNm259udftD538hVXtEGHVsybdSjiU9QBAGYFgsM");
+    try {
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+        walletAddress,
+        { programId: new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") }
+      );            
+      let amount = 0;
+      for (const tokenAccount of tokenAccounts.value) {
+        const tokenInfo = tokenAccount.account.data.parsed.info;
+        if (tokenInfo.mint === tokenMint.toBase58()) {
+          amount += tokenInfo.tokenAmount.uiAmount;
+        }
+      }
+      return amount;
+    } catch (error) {
+      console.error("Error checking token holdings:", error);
+      return 0;
+    }
+  }
+
+  const calculateShares = (members: typeof hydraWalletMembers) => {
+    const totalTokens = members.reduce((sum, member) => sum + (member.tokenBalance || 0), 0);
+    return members.map(member => ({
+      ...member,
+      shares: member.tokenBalance && member.tokenBalance >= MIN_TOKEN_REQUIREMENT
+        ? Math.round((member.tokenBalance / totalTokens) * 100)
+        : 0
+    }));
+  }
+
+  const handleMemberKeyChange = async (value: string, index: number) => {
+    try {
+      const memberPubkey = tryPublicKey(value);
+      if (!memberPubkey) {
+        throw new Error('Invalid public key');
+      }
+
+      const tokenBalance = await checkTokenBalance(memberPubkey);
+      const updatedMembers = [...hydraWalletMembers];
+      updatedMembers[index] = {
+        ...updatedMembers[index],
+        memberKey: value,
+        tokenBalance
+      };
+
+      // Recalculate shares for all members based on token balances
+      const membersWithShares = calculateShares(updatedMembers);
+      setHydraWalletMembers(membersWithShares);
+
+      if (tokenBalance < MIN_TOKEN_REQUIREMENT) {
+        notify({
+          message: 'Low Token Balance',
+          description: `This wallet has less than ${MIN_TOKEN_REQUIREMENT} tokens. Shares will be set to 0.`,
+          type: 'warning',
+        });
+      }
+    } catch (error) {
+      notify({
+        message: 'Error updating member',
+        description: `${error}`,
+        type: 'error',
+      });
+    }
+  };
 
   const validateAndCreateWallet = async () => {
     try {
@@ -39,25 +107,24 @@ const Home: NextPage = () => {
       if (totalShares <= 0) {
         throw 'Please specify a positive number of shares'
       }
+
       let shareSum = 0
       for (const member of hydraWalletMembers) {
         if (!member.memberKey) {
           throw 'Please specify all member public keys'
         }
-        if (!member.shares) {
-          throw 'Please specify all member shares'
+        if (member.shares === undefined) {
+          throw 'Share calculation failed for some members'
         }
         const memberPubkey = tryPublicKey(member.memberKey)
         if (!memberPubkey) {
           throw 'Invalid member public key, unable to cast to PublicKey'
         }
-        if (member.shares <= 0) {
-          throw 'Member shares cannot be negative or zero'
-        }
         shareSum += member.shares
       }
-      if (shareSum !== totalShares) {
-        throw `Sum of all shares must equal ${totalShares}`
+      
+      if (shareSum !== 100) {
+        throw `Sum of all shares must equal 100`
       }
       if (!hydraWalletMembers || hydraWalletMembers.length == 0) {
         throw 'Please specify at least one member'
@@ -79,23 +146,25 @@ const Home: NextPage = () => {
       transaction.add(
         ...(
           await fanoutSdk.initializeFanoutInstructions({
-            totalShares,
+            totalShares: 100, // Always use 100 as total shares
             name: walletName,
             membershipModel: MembershipModel.Wallet,
           })
         ).instructions
       )
       for (const member of hydraWalletMembers) {
-        transaction.add(
-          ...(
-            await fanoutSdk.addMemberWalletInstructions({
-              fanout: fanoutId,
-              fanoutNativeAccount: nativeAccountId,
-              membershipKey: tryPublicKey(member.memberKey)!,
-              shares: member.shares!,
-            })
-          ).instructions
-        )
+        if (member.shares! > 0) { // Only add members with shares greater than 0
+          transaction.add(
+            ...(
+              await fanoutSdk.addMemberWalletInstructions({
+                fanout: fanoutId,
+                fanoutNativeAccount: nativeAccountId,
+                membershipKey: tryPublicKey(member.memberKey)!,
+                shares: member.shares!,
+              })
+            ).instructions
+          )
+        }
       }
       transaction.feePayer = wallet.publicKey!
       const priorityFeeIx = await getPriorityFeeIx(connection, transaction)
@@ -153,23 +222,6 @@ const Home: NextPage = () => {
               value={walletName}
             />
           </div>
-          <div className="w-full mb-6">
-            <label
-              className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2"
-              htmlFor="grid-first-name"
-            >
-              Total Shares
-            </label>
-            <input
-              className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 mb-3 leading-tight focus:outline-none focus:bg-white"
-              name="grid-first-name"
-              type="number"
-              onChange={(e) => {
-                setTotalShares(parseInt(e.target.value))
-              }}
-              value={totalShares}
-            />
-          </div>
           <div className="flex flex-wrap mb-6">
             <div className="w-4/5 pr-3 mb-6 md:mb-0">
               <label className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2">
@@ -178,41 +230,36 @@ const Home: NextPage = () => {
               {hydraWalletMembers &&
                 hydraWalletMembers.map((member, i) => {
                   return (
-                    <input
-                      key={i}
-                      name="memberKey"
-                      className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 mb-3 leading-tight focus:outline-none focus:bg-white"
-                      id="grid-first-name"
-                      type="text"
-                      placeholder="Cmw...4xW"
-                      onChange={(e) => {
-                        const walletMembers = hydraWalletMembers
-                        walletMembers[i]!.memberKey = e.target.value
-                        setHydraWalletMembers([...walletMembers])
-                      }}
-                      value={member.memberKey}
-                    />
+                    <div key={i} className="mb-3">
+                      <input
+                        name="memberKey"
+                        className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
+                        type="text"
+                        placeholder="Cmw...4xW"
+                        onChange={(e) => handleMemberKeyChange(e.target.value, i)}
+                        value={member.memberKey}
+                      />
+                      {member.tokenBalance !== undefined && (
+                        <div className="text-sm text-gray-600 mt-1">
+                          Token Balance: {member.tokenBalance.toLocaleString()}
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
             </div>
             <div className="w-1/5">
               <label className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2">
-                Shares {totalShares ? `/ ${totalShares}` : ''}
+                Shares / 100
               </label>
               {hydraWalletMembers.map((member, i) => {
                 return (
-                  <div className="flex" key={`share-${i}`}>
+                  <div className="flex mb-3" key={`share-${i}`}>
                     <input
-                      className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 mb-3 leading-tight focus:outline-none focus:bg-white"
-                      id="grid-last-name"
+                      className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
                       type="number"
-                      placeholder="50"
-                      onChange={(e) => {
-                        const walletMembers = hydraWalletMembers
-                        walletMembers[i]!.shares = parseInt(e.target.value)
-                        setHydraWalletMembers([...walletMembers])
-                      }}
-                      value={member.shares}
+                      readOnly
+                      value={member.shares ?? 0}
                     />
                   </div>
                 )
@@ -230,6 +277,7 @@ const Home: NextPage = () => {
                     {
                       memberKey: undefined,
                       shares: undefined,
+                      tokenBalance: undefined
                     },
                   ])
                 }
@@ -238,7 +286,7 @@ const Home: NextPage = () => {
               </button>
               <button
                 type="button"
-                className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md "
+                className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md"
                 onClick={() =>
                   setHydraWalletMembers(
                     hydraWalletMembers.filter(
