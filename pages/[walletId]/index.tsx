@@ -187,7 +187,7 @@ const Home: NextPage = () => {
     }
   }
 
-  const handleCopy = async (text, setCopied) => {
+  const handleCopy = async (text: string, setCopied: (isCopied:boolean)=>void) => {
     try {
       await navigator.clipboard.writeText(text ?? '');
       setCopied(true);
@@ -299,7 +299,7 @@ const Home: NextPage = () => {
                 {shortPubKey(fanoutData.data?.fanoutId.toString())}
               </a>
                 <button
-                  onClick={()=>{handleCopy(fanoutData.data?.fanoutId.toString(), setFanCopied)}}
+                  onClick={()=>{handleCopy(fanoutData.data?.fanoutId.toString()||"", setFanCopied)}}
                   className="p-1 hover:bg-gray-100 rounded-md transition-colors"
                   title={copiedFan ? 'Copied!' : 'Copy address'}
                 >
@@ -324,17 +324,6 @@ const Home: NextPage = () => {
                 >
                   {shortPubKey(selectedFanoutMint.data.tokenAccount)}
                 </a>
-                <button
-                  onClick={()=>{handleCopy(selectedFanoutMint.data.tokenAccount, setCopied)}}
-                  className="p-1 hover:bg-gray-100 rounded-md transition-colors"
-                  title={copied ? 'Copied!' : 'Copy address'}
-                >
-                  {copied ? (
-                    <Check className="w-4 h-4 text-green-500" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-gray-500" />
-                  )}
-                </button>
               </p>
             ) : (
               <p className="font-bold uppercase tracking-wide text-md mb-1">
@@ -351,7 +340,7 @@ const Home: NextPage = () => {
                   {shortPubKey(fanoutData.data?.nativeAccount)}
                 </a>
                 <button
-                  onClick={()=>{handleCopy(fanoutData.data?.nativeAccount, setCopied)}}
+                  onClick={()=>{handleCopy(fanoutData.data?.nativeAccount.toString()||"", setCopied)}}
                   className="p-1 hover:bg-gray-100 rounded-md transition-colors"
                   title={copied ? 'Copied!' : 'Copy address'}
                 >
