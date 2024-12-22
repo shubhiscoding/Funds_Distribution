@@ -182,6 +182,9 @@ const Home: NextPage = () => {
                   
                   while (!confirmed && retries > 0) {
                     try {
+                      if (!signedTx) {
+                        throw new Error('Transaction signing failed');
+                      }
                       const signature = await connection.sendRawTransaction(signedTx.serialize(), {
                         skipPreflight: true,
                         maxRetries: 3
@@ -443,7 +446,7 @@ const Home: NextPage = () => {
                       </div>
                       <span className="ml-2 flex-shrink-0">
                         <>
-                          {`(${Number(voucher.parsed.shares).toFixed(4)} shares, `}
+                          {`(${Number(voucher.parsed.shares)} shares, `}
                           {selectedFanoutMint
                             ? fanoutMembershipMintVouchers.data &&
                               fanoutMembershipMintVouchers.data.length > 0

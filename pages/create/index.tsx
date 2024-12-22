@@ -131,8 +131,8 @@ const Home: NextPage = () => {
       const uniqueMembers = new Map<string, { balance: number }>();
   
       rows.forEach(([address, balance]) => {
-        const trimmedAddress = address.trim();
-        const trimmedBalance = parseFloat(balance.trim());
+        const trimmedAddress = address?.trim() || '';
+        const trimmedBalance = balance ? parseFloat(balance.trim()) : 0;
         if (trimmedAddress && !isNaN(trimmedBalance) && !uniqueMembers.has(trimmedAddress)) {
           uniqueMembers.set(trimmedAddress, { balance: trimmedBalance });
         }
@@ -159,13 +159,13 @@ const Home: NextPage = () => {
         notify({
           message: 'CSV Import Warning',
           description: 'No valid wallet addresses were found in the CSV file.',
-          type: 'warning',
+          type: 'warn',
         });
       }
     } catch (error) {
       notify({
         message: 'CSV Import Error',
-        description: `Failed to import CSV: ${error.message || error}`,
+        description: `Failed to import CSV: ${(error as any).message || error}`,
         type: 'error',
       });
     }
