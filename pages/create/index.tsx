@@ -20,7 +20,6 @@ const Home: NextPage = () => {
   const [customConnection, setCustomConnection] = useState<Connection | null>(null)
   const wallet = useWallet()
   const [walletName, setWalletName] = useState<undefined | string>(undefined)
-  const [totalShares, setTotalShares] = useState<undefined | number>(100)
   const [success, setSuccess] = useState(false)
   const [hydraWalletMembers, setHydraWalletMembers] = useState<
     { memberKey?: string; balance?: number; shares?: number }[]
@@ -81,7 +80,7 @@ const Home: NextPage = () => {
       if (indexToAdjust !== -1) {
         calculatedMembers[indexToAdjust] = {
           ...calculatedMembers[indexToAdjust],
-          shares: (calculatedMembers[indexToAdjust].shares || 0) + difference
+          shares: parseFloat((calculatedMembers[indexToAdjust].shares! + difference).toFixed(9))
         };
       }
     }
@@ -95,7 +94,7 @@ const Home: NextPage = () => {
       ...updatedMembers[index],
       memberKey: value
     };
-    setHydraWalletMembers(updatedMembers);
+    setHydraWalletMembers(calculateShares(updatedMembers));
   };
 
   const handleBalanceChange = (value: string, index: number) => {
@@ -106,9 +105,7 @@ const Home: NextPage = () => {
       balance
     };
 
-    // Recalculate shares for all members based on balances
-    const membersWithShares = calculateShares(updatedMembers);
-    setHydraWalletMembers(membersWithShares);
+    setHydraWalletMembers(calculateShares(updatedMembers));
 
     if (balance < MIN_TOKEN_REQUIREMENT) {
       notify({
@@ -161,6 +158,19 @@ const Home: NextPage = () => {
     }
   }
 
+  const addMember = () => {
+    const updatedMembers = [
+      ...hydraWalletMembers,
+      { memberKey: undefined, balance: undefined, shares: undefined },
+    ];
+    setHydraWalletMembers(calculateShares(updatedMembers));
+  };
+
+  const removeMember = (index: number) => {
+    const updatedMembers = hydraWalletMembers.filter((_, i) => i !== index);
+    setHydraWalletMembers(calculateShares(updatedMembers));
+  };
+
   // Rest of the validation and wallet creation logic remains the same
   const validateAndCreateWallet = async () => {
     try {
@@ -172,12 +182,6 @@ const Home: NextPage = () => {
       }
       if (walletName.includes(' ')) {
         throw 'Wallet name cannot contain spaces'
-      }
-      if (!totalShares) {
-        throw 'Please specify the total number of shares for distribution'
-      }
-      if (totalShares <= 0) {
-        throw 'Please specify a positive number of shares'
       }
 
       let shareSum = 0
@@ -195,14 +199,11 @@ const Home: NextPage = () => {
         shareSum += member.shares
       }
       
-      if (shareSum !== 100) {
-        throw `Sum of all shares must equal 100`
+      if (Math.abs(shareSum - 100) > 0.000000001) {
+        throw `Sum of all shares must equal 100 (current sum: ${shareSum.toFixed(9)})`
       }
       if (!hydraWalletMembers || hydraWalletMembers.length == 0) {
         throw 'Please specify at least one member'
-      }
-      if (!hydraWalletMembers || hydraWalletMembers.length > 9) {
-        throw 'Too many members - submit a PR to increase this maximum'
       }
 
       const fanoutId = (await FanoutClient.fanoutKey(walletName))[0]
@@ -325,10 +326,10 @@ const Home: NextPage = () => {
           </div>
 
           {/* Scrollable members list */}
-          <div className="flex-grow overflow-auto max-h-[400px] mb-6 border border-gray-200 rounded">
+          <div className="flex-grow overflow-auto w-full max-h-[400px] mb-6 border border-gray-200 rounded">
             <div className="p-4">
               {hydraWalletMembers.map((member, i) => (
-                <div key={i} className="grid grid-cols-12 gap-4 mb-3">
+                <div key={i} className="grid grid-cols-12 gap-4 mb-3 w-full">
                   <div className="col-span-5">
                     <input
                       name="memberKey"
@@ -350,14 +351,23 @@ const Home: NextPage = () => {
                       value={member.balance}
                     />
                   </div>
-                  <div className="col-span-3">
+                  <div className="col-span-2">
                     <input
-                      className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
+                      className="appearance-none block w-28 bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
                       type="number"
                       step="0.000000001"
                       readOnly
                       value={member.shares ? member.shares.toFixed(9) : '0'}
                     />
+                  </div>
+                  <div className="col-span-1">
+                    <button
+                      type="button"
+                      className="bg-red-500 text-red-600 hover:bg-red-600 hover:text-white px-3 py-3 rounded-md"
+                      onClick={() => removeMember(i)}
+                    >
+                      X
+                    </button>
                   </div>
                 </div>
               ))}
@@ -379,31 +389,9 @@ const Home: NextPage = () => {
                 <button
                   type="button"
                   className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md mr-3"
-                  onClick={() =>
-                    setHydraWalletMembers([
-                      ...hydraWalletMembers,
-                      {
-                        memberKey: undefined,
-                        balance: undefined,
-                        shares: undefined
-                      },
-                    ])
-                  }
+                  onClick={addMember}
                 >
                   Add Member
-                </button>
-                <button
-                  type="button"
-                  className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md"
-                  onClick={() =>
-                    setHydraWalletMembers(
-                      hydraWalletMembers.filter(
-                        (item, index) => index !== hydraWalletMembers.length - 1
-                      )
-                    )
-                  }
-                >
-                  Remove Member
                 </button>
               </div>
               <div>
