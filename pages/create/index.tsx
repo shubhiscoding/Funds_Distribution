@@ -1,7 +1,7 @@
 import { Fanout, FanoutClient, MembershipModel } from '@metaplex-foundation/mpl-hydra/dist/src'
 import { Wallet } from '@saberhq/solana-contrib'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { PublicKey, Transaction, Connection } from '@solana/web3.js'
+import { PublicKey, Transaction, Connection, VersionedTransaction, TransactionMessage } from '@solana/web3.js'
 import { AsyncButton } from 'common/Button'
 import { Header } from 'common/Header'
 import { notify } from 'common/Notification'
@@ -21,6 +21,7 @@ const Home: NextPage = () => {
   const wallet = useWallet()
   const [walletName, setWalletName] = useState<undefined | string>(undefined)
   const [success, setSuccess] = useState(false)
+  const [maxShares, setMaxShares] = useState(0)
   const [hydraWalletMembers, setHydraWalletMembers] = useState<
     { memberKey?: string; balance?: number; shares?: number }[]
   >([{ memberKey: undefined, balance: undefined, shares: undefined }])
@@ -52,7 +53,7 @@ const Home: NextPage = () => {
     const totalEligibleBalance = eligibleMembers.reduce((sum, member) => sum + (member.balance || 0), 0);
   
     // Calculate shares with 9 decimal places precision
-    const calculatedMembers = members.map(member => {
+    const calculatedMembers = eligibleMembers.map(member => {
       const balance = member.balance || 0;
       let sharePercentage = 0;
       
@@ -63,32 +64,11 @@ const Home: NextPage = () => {
   
       return {
         ...member,
-        shares: sharePercentage
+        shares: balance
       };
     });
-  
-    // Ensure total shares sum to exactly 100
-    const totalShares = calculatedMembers.reduce((sum, member) => sum + (member.shares || 0), 0);
-    if (totalShares !== 100 && totalShares !== 0) {
-      // Add any remaining difference to the member with the highest balance
-      const difference = 100 - totalShares;
-      const highestBalanceMember = calculatedMembers
-        .filter(member => (member.balance || 0) >= MIN_TOKEN_REQUIREMENT)
-        .reduce((prev, current) => 
-          (prev.balance || 0) > (current.balance || 0) ? prev : current
-        );
-      
-      const indexToAdjust = calculatedMembers.findIndex(
-        member => member.memberKey === highestBalanceMember.memberKey
-      );
-      
-      if (indexToAdjust !== -1) {
-        calculatedMembers[indexToAdjust] = {
-          ...calculatedMembers[indexToAdjust],
-          shares: parseFloat((calculatedMembers[indexToAdjust].shares! + difference).toFixed(9))
-        };
-      }
-    }
+
+    setMaxShares(totalEligibleBalance);
   
     return calculatedMembers;
   };
@@ -236,9 +216,6 @@ const Home: NextPage = () => {
         shareSum += member.shares
       }
   
-      if (Math.abs(shareSum - 100) > 0.000000001) {
-        throw `Sum of all shares must equal 100 (current sum: ${shareSum.toFixed(9)})`
-      }
       if (!hydraWalletMembers || hydraWalletMembers.length == 0) {
         throw 'Please specify at least one member'
       }
@@ -253,45 +230,107 @@ const Home: NextPage = () => {
         }
       } catch (e) {}
   
+      // Get initialize instructions
       const initializeInstructions = (
         await fanoutSdk.initializeFanoutInstructions({
-          totalShares: 100,
+          totalShares: shareSum,
           name: walletName,
           membershipModel: MembershipModel.Wallet,
         })
       ).instructions
   
-      const chunkSize = 9
-      const memberChunks = []
-      for (let i = 0; i < hydraWalletMembers.length; i += chunkSize) {
-        memberChunks.push(hydraWalletMembers.slice(i, i + chunkSize))
+      // First, prepare all member instructions
+      const allMemberInstructions = await Promise.all(
+        hydraWalletMembers
+          .filter(member => member.shares! > 0)
+          .map(member => 
+            fanoutSdk.addMemberWalletInstructions({
+              fanout: fanoutId,
+              fanoutNativeAccount: nativeAccountId,
+              membershipKey: tryPublicKey(member.memberKey)!,
+              shares: member.shares!,
+            })
+          )
+      );
+  
+      // Flatten instructions array
+      const memberInstructions = allMemberInstructions.map(ix => ix.instructions).flat();
+  
+      // Create smaller batches of instructions
+      const MAX_INSTRUCTIONS_PER_BATCH = 9;
+      const instructionBatches = [initializeInstructions];
+      
+      for (let i = 0; i < memberInstructions.length; i += MAX_INSTRUCTIONS_PER_BATCH) {
+        instructionBatches.push(
+          memberInstructions.slice(i, i + MAX_INSTRUCTIONS_PER_BATCH)
+        );
       }
   
-      for (const chunk of memberChunks) {
-        const transaction = new Transaction()
-        if (chunk === memberChunks[0]) {
-          transaction.add(...initializeInstructions)
-        }
-        for (const member of chunk) {
-          if (member.shares! > 0) {
-            transaction.add(
-              ...(
-                await fanoutSdk.addMemberWalletInstructions({
-                  fanout: fanoutId,
-                  fanoutNativeAccount: nativeAccountId,
-                  membershipKey: tryPublicKey(member.memberKey)!,
-                  shares: member.shares!,
-                })
-              ).instructions
-            )
+      const connection = getConnection();
+      
+      // Process batches in smaller chunks to avoid blockhash expiration
+      const BATCHES_PER_SIGNING = 12; // Number of batches to process in one signing session
+      
+      for (let i = 0; i < instructionBatches.length; i += BATCHES_PER_SIGNING) {
+        const currentBatches = instructionBatches.slice(i, i + BATCHES_PER_SIGNING);
+        
+        // Get fresh blockhash for each chunk of batches
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+        
+        // Create transactions for current batches
+        const transactions = currentBatches.map(instructions => {
+          const messageV0 = new TransactionMessage({
+            payerKey: wallet.publicKey,
+            recentBlockhash: blockhash,
+            instructions,
+          }).compileToV0Message();
+          
+          return new VersionedTransaction(messageV0);
+        });
+  
+        // Sign all transactions in this chunk
+        if (wallet.signAllTransactions) {
+          const signedTransactions = await wallet.signAllTransactions(transactions);
+          
+          // Send and confirm transactions sequentially with retry logic
+          for (const signedTx of signedTransactions) {
+            let confirmed = false;
+            let retries = 3;
+            
+            while (!confirmed && retries > 0) {
+              try {
+                const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+                  skipPreflight: true,
+                  maxRetries: 3
+                });
+                
+                await connection.confirmTransaction({
+                  signature,
+                  blockhash,
+                  lastValidBlockHeight
+                }, 'confirmed');
+                
+                notify({
+                  message: 'Batch processed successfully',
+                  description: `Processed batch ${Math.floor(i / BATCHES_PER_SIGNING) + 1}`,
+                  type: 'success',
+                });
+                
+                confirmed = true;
+              } catch (error) {
+                retries--;
+                if (retries === 0) {
+                  throw error;
+                }
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+            }
           }
         }
-        transaction.feePayer = wallet.publicKey!
-        const priorityFeeIx = await getPriorityFeeIx(getConnection(), transaction)
-        transaction.add(priorityFeeIx)
-        await executeTransaction(getConnection(), wallet as Wallet, transaction, {})
-          }
-      setSuccess(true)
+      }
+  
+      setSuccess(true);
     } catch (e) {
       notify({
         message: `Error creating hydra wallet`,
@@ -367,7 +406,7 @@ const Home: NextPage = () => {
               </div>
               <div className="col-span-3">
                 <label className="uppercase tracking-wide text-gray-700 text-xs font-bold">
-                  Shares / 100
+                  Total Shares ({maxShares.toFixed(2)})
                 </label>
               </div>
             </div>

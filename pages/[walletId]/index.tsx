@@ -372,6 +372,7 @@ const Home: NextPage = () => {
             <p className="font-bold uppercase tracking-wide text-md mb-1">
               Total Members: {fanoutData.data?.fanout?.totalMembers.toString()}
             </p>
+            <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded-md p-4 mb-4">
             <ul className="list-disc ml-6">
               {!fanoutMembershipVouchers.data ? (
                 <>
@@ -385,14 +386,16 @@ const Home: NextPage = () => {
                     key={voucher.pubkey.toString()}
                     className="relative font-bold uppercase tracking-wide text-md mb-1"
                   >
-                    <div className="flex">
-                      <DisplayAddress
-                        connection={connection}
-                        address={voucher.parsed.membershipKey}
-                      />
-                      <span className="ml-2 hover:text-blue-500 transition">
+                    <div className="flex flex-wrap items-center">
+                      <div className="min-w-0 break-all">
+                        <DisplayAddress
+                          connection={connection}
+                          address={voucher.parsed.membershipKey}
+                        />
+                      </div>
+                      <span className="ml-2 flex-shrink-0">
                         <>
-                          {`(${voucher.parsed.shares.toString()} shares, `}
+                          {`(${Number(voucher.parsed.shares).toFixed(4)} shares, `}
                           {selectedFanoutMint
                             ? fanoutMembershipMintVouchers.data &&
                               fanoutMembershipMintVouchers.data.length > 0
@@ -403,9 +406,7 @@ const Home: NextPage = () => {
                                         fanoutMembershipMintVouchers.data.filter(
                                           (v) =>
                                             v.pubkey.toString() ===
-                                            voucherMapping[
-                                              voucher.pubkey.toString()
-                                            ]
+                                            voucherMapping[voucher.pubkey.toString()]
                                         )[0]?.parsed.lastInflow
                                       ),
                                       selectedFanoutMint.info.decimals
@@ -414,11 +415,7 @@ const Home: NextPage = () => {
                                   (Number(voucher.parsed.shares) / 100)
                                 } ${selectedFanoutMint.config.symbol} claimed)`
                               : `0 ${selectedFanoutMint.config.symbol} claimed)`
-                            : `${
-                                parseInt(
-                                  voucher.parsed.totalInflow.toString()
-                                ) / 1e9
-                              }◎ claimed)`}
+                            : `${parseInt(voucher.parsed.totalInflow.toString()) / 1e9}◎ claimed)`}
                         </>
                       </span>
                     </div>
@@ -426,9 +423,10 @@ const Home: NextPage = () => {
                 ))
               )}
             </ul>
-            <p className="font-bold uppercase tracking-wide text-md mb-1">
-              Total Shares: {fanoutData.data?.fanout?.totalShares.toString()}
-            </p>
+          </div>
+          <p className="font-bold uppercase tracking-wide text-md mb-1">
+            Total Shares: {fanoutData.data?.fanout?.totalShares.toString()}
+          </p>
           </div>
           <div className="flex">
             <AsyncButton
