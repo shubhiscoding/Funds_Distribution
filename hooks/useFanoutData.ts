@@ -5,7 +5,8 @@ import { useDataHook } from './useDataHook'
 import { Fanout, FanoutClient } from '@metaplex-foundation/mpl-hydra/dist/src'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { asWallet } from 'common/Wallets'
-import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
+import { Connection, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
+import { useEffect, useState } from 'react'
 
 export type FanoutData = {
   fanoutId: PublicKey
@@ -15,10 +16,26 @@ export type FanoutData = {
 }
 
 export const useFanoutData = () => {
-  const { connection } = useEnvironmentCtx()
+  const { environment } = useEnvironmentCtx()
+  const [connection, setConnection] = useState(
+    environment.label == "mainnet-beta"? new Connection(process.env.NEXT_PUBLIC_RPC_URL!, 'confirmed') :
+    new Connection(process.env.NEXT_PUBLIC_RPC_DEVNET!, 'confirmed')
+  )
   const { data: fanoutId } = useFanoutId()
   const wallet = useWallet()
   const fanoutSdk = new FanoutClient(connection, asWallet(wallet!))
+
+
+    // Initialize connection based on environment
+    useEffect(() => {
+      const rpcUrl = environment.label === 'mainnet-beta' 
+        ? process.env.NEXT_PUBLIC_RPC_URL 
+        : process.env.NEXT_PUBLIC_RPC_DEVNET
+        
+      if (rpcUrl) {
+        setConnection(new Connection(rpcUrl))
+      }
+    }, [environment.label])
 
   return useDataHook<FanoutData>(
     async () => {

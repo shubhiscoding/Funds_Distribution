@@ -1,4 +1,3 @@
-import { TOKEN_PROGRAM_ID } from '@coral-xyz/anchor/dist/cjs/utils/token'
 import { Fanout, FanoutClient, MembershipModel } from '@metaplex-foundation/mpl-hydra/dist/src'
 import { Wallet } from '@saberhq/solana-contrib'
 import { useWallet } from '@solana/wallet-adapter-react'
@@ -16,7 +15,8 @@ import { useState, useRef, useEffect } from 'react'
 const MIN_TOKEN_REQUIREMENT = 100000; // 100k tokens minimum requirement
 
 const Home: NextPage = () => {
-  const { connection, environment } = useEnvironmentCtx()
+  const { environment } = useEnvironmentCtx()
+  const [connection, setConnection] = useState<Connection | null>(null)
   const [customConnection, setCustomConnection] = useState<Connection | null>(null)
   const wallet = useWallet()
   const [walletName, setWalletName] = useState<undefined | string>(undefined)
@@ -26,21 +26,26 @@ const Home: NextPage = () => {
   >([{ memberKey: undefined, balance: undefined, shares: undefined }])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Initialize custom connection for mainnet-beta
+  
+  // Initialize connection based on environment
   useEffect(() => {
-    if (environment.label == 'mainnet-beta') {
-      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL
-      if (rpcUrl) {
-        setCustomConnection(new Connection(rpcUrl))
-      }
+    const rpcUrl = environment.label === 'mainnet-beta' 
+      ? process.env.NEXT_PUBLIC_RPC_URL 
+      : process.env.NEXT_PUBLIC_RPC_DEVNET
+      
+    if (rpcUrl) {
+      setConnection(new Connection(rpcUrl))
     }
   }, [environment.label])
 
   // Use the appropriate connection
   const getConnection = () => {
-    return environment.label === 'mainnet-beta' && customConnection ? customConnection : connection
+    if (!connection) {
+      throw new Error('Connection not initialized')
+    }
+    return connection
   }
-
+  
   const calculateShares = (members: typeof hydraWalletMembers) => {
     // Filter members with balance >= MIN_TOKEN_REQUIREMENT and calculate total eligible balance
     const eligibleMembers = members.filter(member => (member.balance || 0) >= MIN_TOKEN_REQUIREMENT);
@@ -247,6 +252,7 @@ const Home: NextPage = () => {
           throw `Wallet '${walletName}' already exists`
         }
       } catch (e) {}
+  
       const initializeInstructions = (
         await fanoutSdk.initializeFanoutInstructions({
           totalShares: 100,
@@ -284,7 +290,7 @@ const Home: NextPage = () => {
         const priorityFeeIx = await getPriorityFeeIx(getConnection(), transaction)
         transaction.add(priorityFeeIx)
         await executeTransaction(getConnection(), wallet as Wallet, transaction, {})
-      }
+          }
       setSuccess(true)
     } catch (e) {
       notify({

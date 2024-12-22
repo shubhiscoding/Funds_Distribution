@@ -2,12 +2,13 @@ import { tryPublicKey } from './../common/utils'
 import { useFanoutId } from 'hooks/useFanoutId'
 import * as hydra from '@metaplex-foundation/mpl-hydra/dist/src'
 import { BorshAccountsCoder, utils } from '@coral-xyz/anchor'
-import { PublicKey } from '@solana/web3.js'
+import { Connection, PublicKey } from '@solana/web3.js'
 import { useEnvironmentCtx } from 'providers/EnvironmentProvider'
 
 import { useDataHook } from './useDataHook'
 import { AccountData } from 'common/AccountData'
 import { FanoutMembershipMintVoucher } from '@metaplex-foundation/mpl-hydra/dist/src'
+import { useEffect, useState } from 'react'
 
 const HYDRA_PROGRAM_ID = new PublicKey(
   'hyDQ4Nz1eYyegS6JfenyKwKzYxRsCWCriYSAjtzP4Vg'
@@ -16,8 +17,23 @@ const HYDRA_PROGRAM_ID = new PublicKey(
 export const useFanoutMembershipMintVouchers = (
   fanoutMintId?: string | null
 ) => {
-  const { connection } = useEnvironmentCtx()
+  const { environment } = useEnvironmentCtx()
   const { data: fanoutId } = useFanoutId()
+  const [connection, setConnection] = useState(
+    environment.label == "mainnet-beta"? new Connection(process.env.NEXT_PUBLIC_RPC_URL!, 'confirmed') :
+    new Connection(process.env.NEXT_PUBLIC_RPC_DEVNET!, 'confirmed')
+  )
+  // Initialize connection based on environment
+  useEffect(() => {
+    const rpcUrl = environment.label === 'mainnet-beta' 
+      ? process.env.NEXT_PUBLIC_RPC_URL 
+      : process.env.NEXT_PUBLIC_RPC_DEVNET
+      
+    if (rpcUrl) {
+      setConnection(new Connection(rpcUrl))
+    }
+  }, [environment.label])
+
   return useDataHook<AccountData<FanoutMembershipMintVoucher>[]>(
     async () => {
       if (!fanoutId || !fanoutMintId || !tryPublicKey(fanoutMintId)) return

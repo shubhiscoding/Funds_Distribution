@@ -25,6 +25,7 @@ import type { NextPage } from 'next'
 import { useRouter } from 'next/router'
 import { useEnvironmentCtx } from 'providers/EnvironmentProvider'
 import { useEffect, useState } from 'react'
+import { Connection } from '@solana/web3.js'
 
 const Home: NextPage = () => {
   const router = useRouter()
@@ -33,7 +34,11 @@ const Home: NextPage = () => {
   const fanoutMints = useFanoutMints()
   const wallet = useWallet()
   const fanoutData = useFanoutData()
-  const { connection, environment } = useEnvironmentCtx()
+  const { environment } = useEnvironmentCtx()
+  const [connection, setConnection] = useState(
+    environment.label == "mainnet-beta"? new Connection(process.env.NEXT_PUBLIC_RPC_URL!, 'confirmed') :
+    new Connection(process.env.NEXT_PUBLIC_RPC_DEVNET!, 'confirmed')
+  )
   const [copied, setCopied] = useState(false);
   const [copiedFan, setFanCopied] = useState(false);
   let selectedFanoutMint =
@@ -44,6 +49,18 @@ const Home: NextPage = () => {
   const [voucherMapping, setVoucherMapping] = useState<{
     [key: string]: string
   }>({})
+
+
+  // Initialize connection based on environment
+  useEffect(() => {
+    const rpcUrl = environment.label === 'mainnet-beta' 
+      ? process.env.NEXT_PUBLIC_RPC_URL 
+      : process.env.NEXT_PUBLIC_RPC_DEVNET
+      
+    if (rpcUrl) {
+      setConnection(new Connection(rpcUrl))
+    }
+  }, [environment.label])
 
   useEffect(() => {
     const anchor = router.asPath.split('#')[1]
