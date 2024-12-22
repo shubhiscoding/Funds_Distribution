@@ -64,7 +64,7 @@ const Home: NextPage = () => {
   
       return {
         ...member,
-        shares: balance
+        shares: Math.floor(balance)
       };
     });
 
@@ -213,7 +213,7 @@ const Home: NextPage = () => {
         if (!memberPubkey) {
           throw 'Invalid member public key, unable to cast to PublicKey'
         }
-        shareSum += member.shares
+        shareSum += Math.floor(member.shares);
       }
   
       if (!hydraWalletMembers || hydraWalletMembers.length == 0) {
@@ -269,7 +269,7 @@ const Home: NextPage = () => {
       const connection = getConnection();
       
       // Process batches in smaller chunks to avoid blockhash expiration
-      const BATCHES_PER_SIGNING = 12; // Number of batches to process in one signing session
+      const BATCHES_PER_SIGNING = 10; // Number of batches to process in one signing session
       
       for (let i = 0; i < instructionBatches.length; i += BATCHES_PER_SIGNING) {
         const currentBatches = instructionBatches.slice(i, i + BATCHES_PER_SIGNING);
@@ -280,7 +280,7 @@ const Home: NextPage = () => {
         // Create transactions for current batches
         const transactions = currentBatches.map(instructions => {
           const messageV0 = new TransactionMessage({
-            payerKey: wallet.publicKey,
+            payerKey: wallet.publicKey!,
             recentBlockhash: blockhash,
             instructions,
           }).compileToV0Message();

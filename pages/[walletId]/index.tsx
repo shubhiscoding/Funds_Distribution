@@ -3,7 +3,7 @@ import { executeTransaction } from 'common/Transactions'
 import { FanoutClient } from '@metaplex-foundation/mpl-hydra/dist/src'
 import { Wallet } from '@coral-xyz/anchor/dist/cjs/provider'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { PublicKey, Transaction } from '@solana/web3.js'
+import { PublicKey, Transaction, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
 import { AsyncButton } from 'common/Button'
 import { Header } from 'common/Header'
 import { notify } from 'common/Notification'
@@ -107,7 +107,6 @@ const Home: NextPage = () => {
       router.push(`${location.pathname}#${fanoutMint?.config.symbol ?? ''}`)
     }
   }
-
   const distributeShare = async (
     fanoutData: FanoutData,
     addAllMembers: boolean
@@ -115,66 +114,115 @@ const Home: NextPage = () => {
     try {
       if (wallet && wallet.publicKey && fanoutData.fanoutId) {
         const fanoutSdk = new FanoutClient(connection, asWallet(wallet!))
+        
         if (addAllMembers) {
           if (fanoutMembershipVouchers.data) {
-            const distributionMemberSize = 5
+            const MEMBERS_PER_BATCH = 5 // Increased from 5 to 12
+            const BATCHES_PER_SIGNING = 20 // Number of batches to process in one signing session
             const vouchers = fanoutMembershipVouchers.data
-            for (let i = 0; i < vouchers.length; i += distributionMemberSize) {
-              let transaction = new Transaction()
-              const chunk = vouchers.slice(i, i + distributionMemberSize)
-              for (const voucher of chunk) {
-                let distMember =
-                  await fanoutSdk.distributeWalletMemberInstructions({
-                    fanoutMint: selectedFanoutMint
-                      ? selectedFanoutMint?.data.mint
-                      : undefined,
-                    distributeForMint: selectedFanoutMint ? true : false,
-                    member: voucher.parsed.membershipKey,
-                    fanout: fanoutData.fanoutId,
-                    payer: wallet.publicKey,
-                  })
-                transaction.instructions = [
-                  ...transaction.instructions,
-                  ...distMember.instructions,
-                ]
+            
+            // Create all distribution instructions first
+            const allInstructions = await Promise.all(
+              vouchers.map(voucher => 
+                fanoutSdk.distributeWalletMemberInstructions({
+                  fanoutMint: selectedFanoutMint
+                    ? selectedFanoutMint?.data.mint
+                    : undefined,
+                  distributeForMint: selectedFanoutMint ? true : false,
+                  member: voucher.parsed.membershipKey,
+                  fanout: fanoutData.fanoutId,
+                  payer: wallet.publicKey!,
+                })
+              )
+            )
+  
+            // Group instructions into batches
+            const instructionBatches: TransactionInstruction[][] = []
+            for (let i = 0; i < allInstructions.length; i += MEMBERS_PER_BATCH) {
+              const batchInstructions: TransactionInstruction[] = []
+              const batch = allInstructions.slice(i, i + MEMBERS_PER_BATCH)
+              
+              for (const instructions of batch) {
+                batchInstructions.push(...instructions.instructions)
               }
+              
+              // Add priority fee instruction to each batch
+              const priorityFeeIx = await getPriorityFeeIx(connection, new Transaction().add(...batchInstructions))
+              batchInstructions.push(priorityFeeIx)
+              
+              instructionBatches.push(batchInstructions)
+            }
+  
+            // Process batches in chunks
+            for (let i = 0; i < instructionBatches.length; i += BATCHES_PER_SIGNING) {
+              const currentBatches = instructionBatches.slice(i, i + BATCHES_PER_SIGNING)
+              
+              const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-              transaction.feePayer = wallet.publicKey
-              const priorityFeeIx = await getPriorityFeeIx(
-                connection,
-                transaction
-              )
-              transaction.add(priorityFeeIx)
-              const { blockhash } = await connection.getLatestBlockhash()
-              transaction.recentBlockhash = blockhash
-              transaction = await wallet.signTransaction!(transaction)
-
-              const signature = await connection.sendRawTransaction(
-                transaction.serialize(),
-                { maxRetries: 3 }
-              )
-
-              console.info('Tx sig:', signature)
-
-              await connection.confirmTransaction(signature, 'confirmed')
-
-              const numTransactions = Math.ceil(vouchers.length / 5)
-              notify({
-                message: `(${
-                  i / 5 + 1
-                } / ${numTransactions}) Claim tx successful`,
-                description: `Claimed shares for ${
-                  i + distributionMemberSize > vouchers.length
-                    ? vouchers.length
-                    : i + distributionMemberSize
-                } / ${vouchers.length} from ${fanoutData.fanout.name}`,
-                type: 'success',
+              // Create versioned transactions for current batches
+              const transactions = currentBatches.map(instructions => {
+                const messageV0 = new TransactionMessage({
+                  payerKey: wallet.publicKey!,
+                  recentBlockhash: blockhash,
+                  instructions,
+                }).compileToV0Message()
+                
+                return new VersionedTransaction(messageV0)
               })
+  
+              // Sign all transactions in this chunk
+              if (wallet.signAllTransactions) {
+                const signedTransactions = await wallet.signAllTransactions(transactions)
+                
+                // Send and confirm transactions sequentially with retry logic
+                for (let j = 0; j < signedTransactions.length; j++) {
+                  const signedTx = signedTransactions[j]
+                  let confirmed = false
+                  let retries = 3
+                  
+                  while (!confirmed && retries > 0) {
+                    try {
+                      const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+                        skipPreflight: true,
+                        maxRetries: 3
+                      })
+                      
+                      await connection.confirmTransaction({
+                        signature,
+                        blockhash,
+                        lastValidBlockHeight
+                      }, 'confirmed')
+  
+                      const batchStartIndex = i + j
+                      const membersProcessed = Math.min(
+                        (batchStartIndex + 1) * MEMBERS_PER_BATCH,
+                        vouchers.length
+                      )
+                      
+                      notify({
+                        message: `Batch processed successfully`,
+                        description: `Claimed shares for ${membersProcessed} / ${vouchers.length} members from ${fanoutData.fanout.name}`,
+                        type: 'success',
+                      })
+                      
+                      confirmed = true
+                    } catch (error) {
+                      retries--
+                      if (retries === 0) {
+                        throw error
+                      }
+                      // Wait before retry
+                      await new Promise(resolve => setTimeout(resolve, 1000))
+                    }
+                  }
+                }
+              }
             }
           } else {
             throw 'No membership data found'
           }
         } else {
+          // Single member distribution stays the same
           let transaction = new Transaction()
           let distMember = await fanoutSdk.distributeWalletMemberInstructions({
             distributeForMint: false,
