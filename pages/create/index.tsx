@@ -88,7 +88,21 @@ const Home: NextPage = () => {
     return calculatedMembers;
   };
 
+  const isDuplicateWalletAddress = (members: { memberKey?: string; balance?: number; shares?: number }[], address: string) => {
+    return members.some(member => member.memberKey === address);
+  };
+
   const handleMemberKeyChange = (value: string, index: number) => {
+    if (isDuplicateWalletAddress(hydraWalletMembers.filter((_, i) => i !== index), value)) {
+      notify({
+        message: 'Duplicate Address',
+        description: 'This wallet address has already been added.',
+        type: 'warn',
+      });
+      removeMember(index);
+      return;
+    }
+
     const updatedMembers = [...hydraWalletMembers];
     updatedMembers[index] = {
       ...updatedMembers[index],
@@ -117,46 +131,65 @@ const Home: NextPage = () => {
   };
 
   const handleCsvImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
+    const file = event.target.files?.[0];
+    if (!file) return;
+  
     try {
-      const text = await file.text()
-      const rows = text.split('\n').map(row => row.trim())
+      const text = await file.text();
+      const rows = text
+        .split('\n')
+        .map(row => row.trim())
         .filter(row => row.length > 0)
-        .map(row => row.split(','))
-
-      // Create a new array of members
-      const newMembers = rows.map(([address, balance]) => ({
-        memberKey: address.trim(),
-        balance: parseFloat(balance.trim()),
-        shares: undefined
-      })).filter(member => member.memberKey && !isNaN(member.balance!));
-
+        .map(row => row.split(','));
+  
+      // Use a Set to track unique wallet addresses
+      const uniqueMembers = new Map<string, { balance: number }>();
+  
+      rows.forEach(([address, balance]) => {
+        const trimmedAddress = address.trim();
+        const trimmedBalance = parseFloat(balance.trim());
+        if (trimmedAddress && !isNaN(trimmedBalance) && !uniqueMembers.has(trimmedAddress)) {
+          uniqueMembers.set(trimmedAddress, { balance: trimmedBalance });
+        }
+      });
+  
+      // Create an array of unique members
+      const newMembers = Array.from(uniqueMembers.entries()).map(([memberKey, { balance }]) => ({
+        memberKey,
+        balance,
+        shares: undefined,
+      }));
+  
       if (newMembers.length > 0) {
         // Calculate shares for all members
         const membersWithShares = calculateShares(newMembers);
         setHydraWalletMembers(membersWithShares);
-
+  
         notify({
           message: 'CSV Import Success',
-          description: `Imported ${newMembers.length} wallet addresses`,
+          description: `Imported ${newMembers.length} unique wallet addresses`,
           type: 'success',
-        })
+        });
+      } else {
+        notify({
+          message: 'CSV Import Warning',
+          description: 'No valid wallet addresses were found in the CSV file.',
+          type: 'warning',
+        });
       }
     } catch (error) {
       notify({
         message: 'CSV Import Error',
-        description: `Failed to import CSV: ${error}`,
+        description: `Failed to import CSV: ${error.message || error}`,
         type: 'error',
-      })
+      });
     }
-
+  
     // Reset file input
     if (fileInputRef.current) {
-      fileInputRef.current.value = ''
+      fileInputRef.current.value = '';
     }
-  }
+  };  
 
   const addMember = () => {
     const updatedMembers = [
