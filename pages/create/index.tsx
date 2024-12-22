@@ -23,15 +23,14 @@ const Home: NextPage = () => {
   const [totalShares, setTotalShares] = useState<undefined | number>(100)
   const [success, setSuccess] = useState(false)
   const [hydraWalletMembers, setHydraWalletMembers] = useState<
-    { memberKey?: string; shares?: number; tokenBalance?: number }[]
-  >([{ memberKey: undefined, shares: undefined, tokenBalance: undefined }])
+    { memberKey?: string; balance?: number; shares?: number }[]
+  >([{ memberKey: undefined, balance: undefined, shares: undefined }])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Initialize custom connection for mainnet-beta
   useEffect(() => {
     if (environment.label == 'mainnet-beta') {
       const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL
-      console.log(rpcUrl);
       if (rpcUrl) {
         setCustomConnection(new Connection(rpcUrl))
       }
@@ -43,76 +42,126 @@ const Home: NextPage = () => {
     return environment.label === 'mainnet-beta' && customConnection ? customConnection : connection
   }
 
-  async function checkTokenBalance(walletAddress: PublicKey): Promise<number> {
-    const tokenMint = new PublicKey(process.env.NEXT_PUBLIC_TOKEN_MINT!);
-    try {
-      const tokenAccounts = await getConnection().getParsedTokenAccountsByOwner(
-        walletAddress,
-        { programId: TOKEN_PROGRAM_ID }
-      );            
-      let amount = 0;
-      console.log(walletAddress.toBase58());
-      console.log(tokenAccounts);
-      for (const tokenAccount of tokenAccounts.value) {
-        const tokenInfo = tokenAccount.account.data.parsed.info;
-        if (tokenInfo.mint === tokenMint.toBase58()) {
-          console.log("were you here")
-          amount += tokenInfo.tokenAmount.uiAmount;
-        }
-      }
-      console.log("Token balance:", amount);
-      return amount;
-    } catch (error) {
-      console.error("Error checking token holdings:", error);
-      return 0;
-    }
-  }
-
   const calculateShares = (members: typeof hydraWalletMembers) => {
-    const totalTokens = members.reduce((sum, member) => sum + (member.tokenBalance || 0), 0);
-    return members.map(member => ({
-      ...member,
-      shares: member.tokenBalance && member.tokenBalance >= MIN_TOKEN_REQUIREMENT
-        ? Math.round((member.tokenBalance / totalTokens) * 100)
-        : 0
-    }));
-  }
-
-  const handleMemberKeyChange = async (value: string, index: number) => {
-    try {
-      const memberPubkey = tryPublicKey(value);
-      if (!memberPubkey) {
-        throw new Error('Invalid public key');
+    // Filter members with balance >= MIN_TOKEN_REQUIREMENT and calculate total eligible balance
+    const eligibleMembers = members.filter(member => (member.balance || 0) >= MIN_TOKEN_REQUIREMENT);
+    const totalEligibleBalance = eligibleMembers.reduce((sum, member) => sum + (member.balance || 0), 0);
+  
+    // Calculate shares with 9 decimal places precision
+    const calculatedMembers = members.map(member => {
+      const balance = member.balance || 0;
+      let sharePercentage = 0;
+      
+      if (balance >= MIN_TOKEN_REQUIREMENT && totalEligibleBalance > 0) {
+        // Calculate share percentage with 9 decimal places
+        sharePercentage = parseFloat(((balance / totalEligibleBalance) * 100).toFixed(9));
       }
-
-      const tokenBalance = await checkTokenBalance(memberPubkey);
-      const updatedMembers = [...hydraWalletMembers];
-      updatedMembers[index] = {
-        ...updatedMembers[index],
-        memberKey: value,
-        tokenBalance
+  
+      return {
+        ...member,
+        shares: sharePercentage
       };
-
-      // Recalculate shares for all members based on token balances
-      const membersWithShares = calculateShares(updatedMembers);
-      setHydraWalletMembers(membersWithShares);
-
-      if (tokenBalance < MIN_TOKEN_REQUIREMENT) {
-        notify({
-          message: 'Low Token Balance',
-          description: `This wallet has less than ${MIN_TOKEN_REQUIREMENT} tokens. Shares will be set to 0.`,
-          type: 'warn',
-        });
+    });
+  
+    // Ensure total shares sum to exactly 100
+    const totalShares = calculatedMembers.reduce((sum, member) => sum + (member.shares || 0), 0);
+    if (totalShares !== 100 && totalShares !== 0) {
+      // Add any remaining difference to the member with the highest balance
+      const difference = 100 - totalShares;
+      const highestBalanceMember = calculatedMembers
+        .filter(member => (member.balance || 0) >= MIN_TOKEN_REQUIREMENT)
+        .reduce((prev, current) => 
+          (prev.balance || 0) > (current.balance || 0) ? prev : current
+        );
+      
+      const indexToAdjust = calculatedMembers.findIndex(
+        member => member.memberKey === highestBalanceMember.memberKey
+      );
+      
+      if (indexToAdjust !== -1) {
+        calculatedMembers[indexToAdjust] = {
+          ...calculatedMembers[indexToAdjust],
+          shares: (calculatedMembers[indexToAdjust].shares || 0) + difference
+        };
       }
-    } catch (error) {
+    }
+  
+    return calculatedMembers;
+  };
+
+  const handleMemberKeyChange = (value: string, index: number) => {
+    const updatedMembers = [...hydraWalletMembers];
+    updatedMembers[index] = {
+      ...updatedMembers[index],
+      memberKey: value
+    };
+    setHydraWalletMembers(updatedMembers);
+  };
+
+  const handleBalanceChange = (value: string, index: number) => {
+    const balance = parseFloat(value) || 0;
+    const updatedMembers = [...hydraWalletMembers];
+    updatedMembers[index] = {
+      ...updatedMembers[index],
+      balance
+    };
+
+    // Recalculate shares for all members based on balances
+    const membersWithShares = calculateShares(updatedMembers);
+    setHydraWalletMembers(membersWithShares);
+
+    if (balance < MIN_TOKEN_REQUIREMENT) {
       notify({
-        message: 'Error updating member',
-        description: `${error}`,
-        type: 'error',
+        message: 'Low Token Balance',
+        description: `This wallet has less than ${MIN_TOKEN_REQUIREMENT} tokens. Shares will be set to 0.`,
+        type: 'warn',
       });
     }
   };
 
+  const handleCsvImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const text = await file.text()
+      const rows = text.split('\n').map(row => row.trim())
+        .filter(row => row.length > 0)
+        .map(row => row.split(','))
+
+      // Create a new array of members
+      const newMembers = rows.map(([address, balance]) => ({
+        memberKey: address.trim(),
+        balance: parseFloat(balance.trim()),
+        shares: undefined
+      })).filter(member => member.memberKey && !isNaN(member.balance!));
+
+      if (newMembers.length > 0) {
+        // Calculate shares for all members
+        const membersWithShares = calculateShares(newMembers);
+        setHydraWalletMembers(membersWithShares);
+
+        notify({
+          message: 'CSV Import Success',
+          description: `Imported ${newMembers.length} wallet addresses`,
+          type: 'success',
+        })
+      }
+    } catch (error) {
+      notify({
+        message: 'CSV Import Error',
+        description: `Failed to import CSV: ${error}`,
+        type: 'error',
+      })
+    }
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  // Rest of the validation and wallet creation logic remains the same
   const validateAndCreateWallet = async () => {
     try {
       if (!wallet.publicKey) {
@@ -153,7 +202,7 @@ const Home: NextPage = () => {
         throw 'Please specify at least one member'
       }
       if (!hydraWalletMembers || hydraWalletMembers.length > 9) {
-        throw 'Too many members - submit a PR to https://github.com/metaplex-foundation/hydra-ui/ to increase this maximum'
+        throw 'Too many members - submit a PR to increase this maximum'
       }
 
       const fanoutId = (await FanoutClient.fanoutKey(walletName))[0]
@@ -203,70 +252,6 @@ const Home: NextPage = () => {
     }
   }
 
-  const handleCsvImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      const text = await file.text()
-      const addresses = text.split(',').map(address => address.trim())
-        .filter(address => address.length > 0) // Filter out empty strings
-
-      // Create a new array of members
-      const newMembers: typeof hydraWalletMembers = []
-
-      for (const address of addresses) {
-        try {
-          const memberPubkey = tryPublicKey(address)
-          if (!memberPubkey) {
-            notify({
-              message: 'Invalid address in CSV',
-              description: `Skipping invalid address: ${address}`,
-              type: 'warn',
-            })
-            continue
-          }
-
-          const tokenBalance = await checkTokenBalance(memberPubkey)
-          newMembers.push({
-            memberKey: address,
-            tokenBalance,
-            shares: undefined
-          })
-        } catch (error) {
-          notify({
-            message: 'Error processing address',
-            description: `Failed to process address ${address}: ${error}`,
-            type: 'warn',
-          })
-        }
-      }
-
-      if (newMembers.length > 0) {
-        // Calculate shares for all members
-        const membersWithShares = calculateShares(newMembers)
-        setHydraWalletMembers(membersWithShares)
-
-        notify({
-          message: 'CSV Import Success',
-          description: `Imported ${newMembers.length} wallet addresses`,
-          type: 'success',
-        })
-      }
-    } catch (error) {
-      notify({
-        message: 'CSV Import Error',
-        description: `Failed to import CSV: ${error}`,
-        type: 'error',
-      })
-    }
-
-    // Reset file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }
-
   return (
     <div className="bg-white h-screen max-h-screen">
       <Header />
@@ -277,7 +262,6 @@ const Home: NextPage = () => {
               Hydra Wallet Created
             </p>
             <p>
-              {' '}
               Access the wallet at{' '}
               <a
                 href={`/${walletName}${window.location.search ?? ''}`}
@@ -289,137 +273,156 @@ const Home: NextPage = () => {
             </p>
           </div>
         )}
-        <form className="w-full max-w-lg">
-          <div className="w-full mb-6">
-            <label
-              className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2"
-              htmlFor="grid-first-name"
-            >
-              Hydra Wallet Name
-            </label>
-            <input
-              className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 mb-3 leading-tight focus:outline-none focus:bg-white"
-              name="grid-first-name"
-              type="text"
-              placeholder="hydra-wallet"
-              onChange={(e) => {
-                setWalletName(e.target.value)
-                setSuccess(false)
-              }}
-              value={walletName}
-            />
-          </div>
-          <div className="flex flex-wrap">
+        <form className="w-full max-w-lg flex flex-col h-full">
+          {/* Fixed header section */}
+          <div className="flex-none">
+            <div className="w-full mb-6">
+              <label
+                className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2"
+                htmlFor="grid-first-name"
+              >
+                Hydra Wallet Name
+              </label>
+              <input
+                className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 mb-3 leading-tight focus:outline-none focus:bg-white"
+                name="grid-first-name"
+                type="text"
+                placeholder="hydra-wallet"
+                onChange={(e) => {
+                  setWalletName(e.target.value)
+                  setSuccess(false)
+                }}
+                value={walletName}
+              />
+            </div>
+
             <button
               type="button"
-              style={{ backgroundColor: '#000' }}
-              className=" text-white hover:bg-green-600 px-4 py-2 rounded-md text-sm mb-6"
+              style={{backgroundColor: '#000'}}
+              className="bg-black text-white hover:bg-gray-800 px-4 py-2 rounded-md text-sm mb-6"
               onClick={() => fileInputRef.current?.click()}
             >
               Import from CSV
             </button>
-            <div className="w-4/5 pr-3 mb-6 md:mb-0">
-            <div className="flex justify-between items-center mb-2">
+
+            <div className="grid grid-cols-12 gap-4 w-full mb-2">
+              <div className="col-span-5">
                 <label className="uppercase tracking-wide text-gray-700 text-xs font-bold">
                   Wallet Address
                 </label>
-                <div>
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleCsvImport}
-                    className="hidden"
-                    ref={fileInputRef}
-                  />
-                </div>
               </div>
-              {hydraWalletMembers &&
-                hydraWalletMembers.map((member, i) => {
-                  return (
-                    <div key={i} className="mb-3">
-                      <input
-                        name="memberKey"
-                        className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
-                        type="text"
-                        placeholder="Cmw...4xW"
-                        onChange={(e) => handleMemberKeyChange(e.target.value, i)}
-                        value={member.memberKey}
-                      />
-                      {member.tokenBalance !== undefined && (
-                        <div className="text-sm text-gray-600 mt-1">
-                          Token Balance: {member.tokenBalance.toLocaleString()}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+              <div className="col-span-4">
+                <label className="uppercase tracking-wide text-gray-700 text-xs font-bold">
+                  Balance
+                </label>
+              </div>
+              <div className="col-span-3">
+                <label className="uppercase tracking-wide text-gray-700 text-xs font-bold">
+                  Shares / 100
+                </label>
+              </div>
             </div>
-            <div className="w-1/5">
-              <label className="block uppercase tracking-wide text-gray-700 text-xs font-bold mb-2">
-                Shares / 100
-              </label>
-              {hydraWalletMembers.map((member, i) => {
-                return (
-                  <div className="flex mb-9" key={`share-${i}`}>
+          </div>
+
+          {/* Scrollable members list */}
+          <div className="flex-grow overflow-auto max-h-[400px] mb-6 border border-gray-200 rounded">
+            <div className="p-4">
+              {hydraWalletMembers.map((member, i) => (
+                <div key={i} className="grid grid-cols-12 gap-4 mb-3">
+                  <div className="col-span-5">
+                    <input
+                      name="memberKey"
+                      className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
+                      type="text"
+                      placeholder="Cmw...4xW"
+                      onChange={(e) => handleMemberKeyChange(e.target.value, i)}
+                      value={member.memberKey}
+                    />
+                  </div>
+                  <div className="col-span-4">
+                    <input
+                      name="balance"
+                      className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
+                      type="number"
+                      step="0.0001"
+                      placeholder="Token Balance"
+                      onChange={(e) => handleBalanceChange(e.target.value, i)}
+                      value={member.balance}
+                    />
+                  </div>
+                  <div className="col-span-3">
                     <input
                       className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
                       type="number"
+                      step="0.000000001"
                       readOnly
-                      value={member.shares ?? 0}
+                      value={member.shares ? member.shares.toFixed(9) : '0'}
                     />
                   </div>
-                )
-              })}
+                </div>
+              ))}
             </div>
           </div>
-          <div className="flex justify-between">
-            <div>
-              <button
-                type="button"
-                className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md mr-3"
-                onClick={() =>
-                  setHydraWalletMembers([
-                    ...hydraWalletMembers,
-                    {
-                      memberKey: undefined,
-                      shares: undefined,
-                      tokenBalance: undefined
-                    },
-                  ])
-                }
-              >
-                Add Member
-              </button>
-              <button
-                type="button"
-                className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md"
-                onClick={() =>
-                  setHydraWalletMembers(
-                    hydraWalletMembers.filter(
-                      (item, index) => index !== hydraWalletMembers.length - 1
+
+          {/* Fixed footer section */}
+          <div className="flex-none">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleCsvImport}
+              className="hidden"
+              ref={fileInputRef}
+            />
+            
+            <div className="flex justify-between">
+              <div>
+                <button
+                  type="button"
+                  className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md mr-3"
+                  onClick={() =>
+                    setHydraWalletMembers([
+                      ...hydraWalletMembers,
+                      {
+                        memberKey: undefined,
+                        balance: undefined,
+                        shares: undefined
+                      },
+                    ])
+                  }
+                >
+                  Add Member
+                </button>
+                <button
+                  type="button"
+                  className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md"
+                  onClick={() =>
+                    setHydraWalletMembers(
+                      hydraWalletMembers.filter(
+                        (item, index) => index !== hydraWalletMembers.length - 1
+                      )
                     )
-                  )
-                }
-              >
-                Remove Member
-              </button>
-            </div>
-            <div>
-              <AsyncButton
-                type="button"
-                bgColor="rgb(96 165 250)"
-                variant="primary"
-                className="bg-blue-400 text-white hover:bg-blue-500 px-4 py-3 rounded-md"
-                handleClick={async () => validateAndCreateWallet()}
-              >
-                Create Hydra Wallet
-              </AsyncButton>
+                  }
+                >
+                  Remove Member
+                </button>
+              </div>
+              <div>
+                <AsyncButton
+                  type="button"
+                  bgColor="rgb(96 165 250)"
+                  variant="primary"
+                  className="bg-blue-400 text-white hover:bg-blue-500 px-4 py-3 rounded-md"
+                  handleClick={async () => validateAndCreateWallet()}
+                >
+                  Create Hydra Wallet
+                </AsyncButton>
+              </div>
             </div>
           </div>
         </form>
       </main>
     </div>
-  )
-}
+  );
+};
 
-export default Home
+export default Home;
