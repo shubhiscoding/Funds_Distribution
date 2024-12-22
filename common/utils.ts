@@ -130,7 +130,11 @@ export const getPriorityFeeIx = async (
   transaction: Transaction
 ): Promise<TransactionInstruction> => {
   const distinctPublicKeys = getDistinctPublicKeys(transaction);
-  // directly fetch to avoid web3.js compatability issues
+
+  // Limit the public keys to the first 10
+  const limitedPublicKeys = distinctPublicKeys.slice(0, 10);
+  
+  // Directly fetch to avoid web3.js compatibility issues
   const response = await fetch(connection.rpcEndpoint, {
     method: 'POST',
     headers: {
@@ -140,9 +144,10 @@ export const getPriorityFeeIx = async (
       jsonrpc: '2.0',
       id: 1,
       method: 'getRecentPrioritizationFees',
-      params: [distinctPublicKeys],
+      params: [limitedPublicKeys],
     }),
   });
+  
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);

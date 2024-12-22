@@ -204,7 +204,6 @@ const Home: NextPage = () => {
     setHydraWalletMembers(calculateShares(updatedMembers));
   };
 
-  // Rest of the validation and wallet creation logic remains the same
   const validateAndCreateWallet = async () => {
     try {
       if (!wallet.publicKey) {
@@ -216,7 +215,7 @@ const Home: NextPage = () => {
       if (walletName.includes(' ')) {
         throw 'Wallet name cannot contain spaces'
       }
-
+  
       let shareSum = 0
       for (const member of hydraWalletMembers) {
         if (!member.memberKey) {
@@ -231,14 +230,14 @@ const Home: NextPage = () => {
         }
         shareSum += member.shares
       }
-      
+  
       if (Math.abs(shareSum - 100) > 0.000000001) {
         throw `Sum of all shares must equal 100 (current sum: ${shareSum.toFixed(9)})`
       }
       if (!hydraWalletMembers || hydraWalletMembers.length == 0) {
         throw 'Please specify at least one member'
       }
-
+  
       const fanoutId = (await FanoutClient.fanoutKey(walletName))[0]
       const [nativeAccountId] = await FanoutClient.nativeAccount(fanoutId)
       const fanoutSdk = new FanoutClient(getConnection(), asWallet(wallet!))
@@ -248,34 +247,44 @@ const Home: NextPage = () => {
           throw `Wallet '${walletName}' already exists`
         }
       } catch (e) {}
-      const transaction = new Transaction()
-      transaction.add(
-        ...(
-          await fanoutSdk.initializeFanoutInstructions({
-            totalShares: 100,
-            name: walletName,
-            membershipModel: MembershipModel.Wallet,
-          })
-        ).instructions
-      )
-      for (const member of hydraWalletMembers) {
-        if (member.shares! > 0) {
-          transaction.add(
-            ...(
-              await fanoutSdk.addMemberWalletInstructions({
-                fanout: fanoutId,
-                fanoutNativeAccount: nativeAccountId,
-                membershipKey: tryPublicKey(member.memberKey)!,
-                shares: member.shares!,
-              })
-            ).instructions
-          )
-        }
+      const initializeInstructions = (
+        await fanoutSdk.initializeFanoutInstructions({
+          totalShares: 100,
+          name: walletName,
+          membershipModel: MembershipModel.Wallet,
+        })
+      ).instructions
+  
+      const chunkSize = 9
+      const memberChunks = []
+      for (let i = 0; i < hydraWalletMembers.length; i += chunkSize) {
+        memberChunks.push(hydraWalletMembers.slice(i, i + chunkSize))
       }
-      transaction.feePayer = wallet.publicKey!
-      const priorityFeeIx = await getPriorityFeeIx(getConnection(), transaction)
-      transaction.add(priorityFeeIx)
-      await executeTransaction(getConnection(), wallet as Wallet, transaction, {})
+  
+      for (const chunk of memberChunks) {
+        const transaction = new Transaction()
+        if (chunk === memberChunks[0]) {
+          transaction.add(...initializeInstructions)
+        }
+        for (const member of chunk) {
+          if (member.shares! > 0) {
+            transaction.add(
+              ...(
+                await fanoutSdk.addMemberWalletInstructions({
+                  fanout: fanoutId,
+                  fanoutNativeAccount: nativeAccountId,
+                  membershipKey: tryPublicKey(member.memberKey)!,
+                  shares: member.shares!,
+                })
+              ).instructions
+            )
+          }
+        }
+        transaction.feePayer = wallet.publicKey!
+        const priorityFeeIx = await getPriorityFeeIx(getConnection(), transaction)
+        transaction.add(priorityFeeIx)
+        await executeTransaction(getConnection(), wallet as Wallet, transaction, {})
+      }
       setSuccess(true)
     } catch (e) {
       notify({
