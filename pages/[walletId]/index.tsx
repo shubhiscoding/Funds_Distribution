@@ -107,6 +107,37 @@ const Home: NextPage = () => {
       router.push(`${location.pathname}#${fanoutMint?.config.symbol ?? ''}`)
     }
   }
+
+
+  const [distributionDetails, setDistributionDetails] = useState<{
+    walletAddress: string;
+    transactionHash: string;
+    amount: string;
+  }[]>([]);
+  const [showDownloadButton, setShowDownloadButton] = useState(false);
+
+  const downloadDistributionCSV = () => {
+    const csvContent = [
+      ['Wallet Address', 'Transaction Hash', 'Amount'],
+      ...distributionDetails.map(detail => [
+        detail.walletAddress,
+        detail.transactionHash,
+        detail.amount
+      ])
+    ]
+      .map(row => row.join(','))
+      .join('\n');
+  
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `distribution_details_${new Date().toISOString()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const distributeShare = async (
     fanoutData: FanoutData,
     addAllMembers: boolean
@@ -114,6 +145,15 @@ const Home: NextPage = () => {
     try {
       if (wallet && wallet.publicKey && fanoutData.fanoutId) {
         const fanoutSdk = new FanoutClient(connection, asWallet(wallet!))
+
+        console.log(fanoutData)
+
+        const newDistributionDetails: {
+          walletAddress: string;
+          transactionHash: string;
+          share: string;
+          amount: string;
+        }[] = [];
         
         if (addAllMembers) {
           if (fanoutMembershipVouchers.data) {
@@ -196,19 +236,22 @@ const Home: NextPage = () => {
                         lastValidBlockHeight
                       }, 'confirmed')
   
-                      const batchStartIndex = i + j
-                      const membersProcessed = Math.min(
-                        (batchStartIndex + 1) * MEMBERS_PER_BATCH,
-                        vouchers.length
-                      )
+                      const batchStartIndex = i * MEMBERS_PER_BATCH + j * MEMBERS_PER_BATCH;
+                      const batchMembers = vouchers.slice(batchStartIndex, batchStartIndex + MEMBERS_PER_BATCH);
                       
-                      notify({
-                        message: `Batch processed successfully`,
-                        description: `Claimed shares for ${membersProcessed} / ${vouchers.length} members from ${fanoutData.fanout.name}`,
-                        type: 'success',
-                      })
-                      
-                      confirmed = true
+                      for (const member of batchMembers) {
+                        const memberShare = Number(member.parsed.shares) / fanoutData.fanout?.totalShares.toString();
+                        const totalAmount =`${(Number(fanoutData?.balance) * memberShare).toFixed(6)}◎`;
+                        
+                        newDistributionDetails.push({
+                          walletAddress: member.parsed.membershipKey.toString(),
+                          transactionHash: signature,
+                          share: memberShare.toString(),
+                          amount: totalAmount,
+                        });
+                      }
+  
+                      confirmed = true;
                     } catch (error) {
                       retries--
                       if (retries === 0) {
@@ -221,6 +264,14 @@ const Home: NextPage = () => {
                 }
               }
             }
+            setDistributionDetails(newDistributionDetails);
+            setShowDownloadButton(true);
+            
+            notify({
+              message: 'Distribution complete',
+              description: 'All shares have been distributed. You can now download the distribution details.',
+              type: 'success',
+            });
           } else {
             throw 'No membership data found'
           }
@@ -491,6 +542,14 @@ const Home: NextPage = () => {
             >
               Distribute To All
             </AsyncButton>
+            {showDownloadButton && (
+              <button
+                onClick={downloadDistributionCSV}
+                className="bg-green-500 text-white hover:bg-green-600 px-3 py-2 rounded-md"
+              >
+                Download Distribution Details
+              </button>
+            )}
           </div>
         </div>
       </main>

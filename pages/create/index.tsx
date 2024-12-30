@@ -406,7 +406,7 @@ const Home: NextPage = () => {
               </div>
               <div className="col-span-3">
                 <label className="uppercase tracking-wide text-gray-700 text-xs font-bold">
-                  Total Shares ({maxShares.toFixed(2)})
+                  Total Shares ({maxShares.toFixed(0)})
                 </label>
               </div>
             </div>
@@ -432,19 +432,19 @@ const Home: NextPage = () => {
                       name="balance"
                       className="appearance-none block w-full bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
                       type="number"
-                      step="0.0001"
+                      step="1"
                       placeholder="Token Balance"
                       onChange={(e) => handleBalanceChange(e.target.value, i)}
-                      value={member.balance}
+                      value={member.balance?.toFixed(0)}
                     />
                   </div>
                   <div className="col-span-2">
                     <input
                       className="appearance-none block w-28 bg-gray-200 text-gray-700 border border-gray-200 rounded py-3 px-4 leading-tight focus:outline-none focus:bg-white"
                       type="number"
-                      step="0.000000001"
+                      step="1"
                       readOnly
-                      value={member.shares ? member.shares.toFixed(9) : '0'}
+                      value={member.shares ? member.shares.toFixed(0) : '0'}
                     />
                   </div>
                   <div className="col-span-1">
@@ -472,15 +472,6 @@ const Home: NextPage = () => {
             />
             
             <div className="flex justify-between">
-              <div>
-                <button
-                  type="button"
-                  className="bg-gray-200 text-gray-600 hover:bg-gray-300 px-4 py-3 rounded-md mr-3"
-                  onClick={addMember}
-                >
-                  Add Member
-                </button>
-              </div>
               <div>
                 <AsyncButton
                   type="button"
